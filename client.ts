@@ -1,12 +1,12 @@
 import 'dotenv/config';
 import dgram from 'dgram';
-import {v4 as uuidv4} from 'uuid';
-import { performance } from 'perf_hooks';
 import os from 'os';
 import fs from 'fs';
-import * as clientTypes from './types/clientTypes'
-import * as serverTypes from './types/serverTypes'
-import * as commonTypes from './types/commonTypes'
+import {v4 as uuidv4} from 'uuid';
+import { performance } from 'perf_hooks';
+import {HELLO_DATA, RETURN_CALL_FUNCTION, HELLO, HEARTBEAT} from './types/clientTypes'
+import {CALL_FUNCTION_DATA} from './types/serverTypes'
+import {REQUEST_ERROR, RESULT_ERROR, RESULT_OK} from './types/commonTypes'
 
 
 
@@ -15,10 +15,10 @@ const PORT = Number(process.env.PORT)
 const clientId = uuidv4()
 const pathToImage = './files/pirate.jpg'
 const fileImage = fs.readFileSync(pathToImage)
-const errorObj:commonTypes.RESULT_ERROR = {data:{
+const errorObj:RESULT_ERROR = {data:{
   description:'Uncnown request'
 }}
-const ok_obj:commonTypes.RESULT_OK = {
+const ok_obj:RESULT_OK = {
   data:{
     descrption:'ok'
   }
@@ -63,7 +63,7 @@ function getCurrentTime(){
   return date.toISOString()
 }
 
-function isCallFunctions(obj:any):obj is serverTypes.CALL_FUNCTION_DATA{
+function isCallFunctions(obj:any):obj is CALL_FUNCTION_DATA{
   try{
     return (
       typeof obj === 'object' &&
@@ -79,7 +79,7 @@ function isCallFunctions(obj:any):obj is serverTypes.CALL_FUNCTION_DATA{
 
 }
 
-function isRequestError(obj: any): obj is commonTypes.REQUEST_ERROR{
+function isRequestError(obj: any): obj is REQUEST_ERROR{
   try{
     return (
     typeof obj === 'object' &&
@@ -105,7 +105,7 @@ function sendMessage(msg: string){
       
 }
 
-const clientData:clientTypes.HELLO_DATA = {
+const clientData:HELLO_DATA = {
     data:{
         capacities:[clientFunctions.clientFreeMemory,
              clientFunctions.hddSpeed,
@@ -116,15 +116,16 @@ const clientData:clientTypes.HELLO_DATA = {
     }
 }
 
-const sendHello:clientTypes.HELLO = (data:clientTypes.HELLO_DATA)=>{
+const sendHello:HELLO = (data:HELLO_DATA)=>{
     const jsonData = JSON.stringify(data)
     sendMessage(jsonData)
     return null
 }
 
-const sendHeartbeat:clientTypes.HEARTBEAT = ()=>{
+const sendHeartbeat:HEARTBEAT = ()=>{
   const data = {
-    type:'HEARTBEAT'
+    type:'HEARTBEAT',
+    clientId: clientId
   }
   sendMessage(JSON.stringify(data))
   return null
@@ -134,26 +135,31 @@ const getClientDetails = ()=>{
   return clientData
 }
 
-const call_function:serverTypes.CALL_FUNCTION = (data:serverTypes.CALL_FUNCTION_DATA)=>{
-  let calledFunc = data.data.name
-  switch (calledFunc){
-    case 'randomNumber':
-      console.log('randomNumber')
-      return randomNumber(data.data.functionArgs[0],data.data.functionArgs[1])
-    case 'clientFreeMemory':
-      console.log(clientFreeMemory)
-      return clientFreeMemory()
-    case 'hddSpeed':
-      console.log('hddSpeed')
-      return hddSpeed().then((time) => {
-                console.log(`Время, затраченное на запись 1 мегабайта нулей: ${time.toFixed(2)} миллисекунд`);
-            })
-            .catch((error) => {
-                console.error('Произошла ошибка:', error);
-            });
-  }
 
-}
+
+const call_function = async (data:CALL_FUNCTION_DATA)=>{
+    let calledFunc = data.data.name
+    switch (calledFunc){
+      case 'randomNumber':
+        console.log('randomNumber')
+        return randomNumber(Number(data.data.functionArgs[0]),Number(data.data.functionArgs[1]))
+      case 'clientFreeMemory':
+        console.log(clientFreeMemory)
+        return clientFreeMemory()
+      case 'hddSpeed':
+        console.log('hddSpeed')
+        return hddSpeed().then((time) => {
+                  console.log(`Время, затраченное на запись 1 мегабайта нулей: ${time.toFixed(2)} миллисекунд`);
+                  return time.toFixed(2)
+              })
+              .catch((error) => {
+                  console.error('Произошла ошибка:', error);
+              });
+      default:
+        throw new Error('Uncnown function')
+    }
+  
+  }
 
 
 
@@ -168,7 +174,7 @@ client.bind(() => {
 
 
 
-client.on('message', (msg:string,rinfo)=>{
+client.on('message', async (msg:string,rinfo)=>{
   let msgObj:any = {};
   try{
      msgObj = JSON.parse(msg)
@@ -186,8 +192,13 @@ client.on('message', (msg:string,rinfo)=>{
     client.send(JSON.stringify(ok_obj),rinfo.port, rinfo.address)
     client.send(JSON.stringify(clientData),rinfo.port, rinfo.address)
   }else if (isCallFunctions(msgObj)){
+    const result = await call_function(msgObj)
+    const returnCallFunction:RETURN_CALL_FUNCTION = {
+      type:'RETURN_CALL_FUNCTION',
+      result:result
+    }
     client.send(JSON.stringify(ok_obj),rinfo.port, rinfo.address)
-    call_function(msgObj)
+    client.send(JSON.stringify(returnCallFunction),rinfo.port, rinfo.address)
   }else if (isRequestError(msgObj)){
 
   }

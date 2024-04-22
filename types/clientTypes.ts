@@ -23,6 +23,20 @@ export type CLIENT_DATA =
     }
   
   
+export type FULL_CLIENT_DATA = {
+  id: string
+  capacities: string[]
+  icon?: Buffer
+  adress: string
+  port: number
+  timeLastHeartbeat:string
+  isAvaliable: boolean
+}  
+
+export type RETURN_CALL_FUNCTION = {
+  type:'RETURN_CALL_FUNCTION'
+  result:any
+}
 export type GET_CLIENTS = () =>CLIENTS_DATA
   
 export type HELLO = (data:HELLO_DATA)=>null;
@@ -30,7 +44,8 @@ export type HELLO = (data:HELLO_DATA)=>null;
 export type HEARTBEAT = ()=>null;
 
 export type HEARTBEAT_DATA = {
-  type:'HEARTBEAT'
+  type:'HEARTBEAT',
+  clientId:string
 }
 
 

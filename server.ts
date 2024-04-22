@@ -1,31 +1,37 @@
 import 'dotenv/config'
 import dgram from 'dgram';
-import * as serverTypes from './types/serverTypes'
-import * as clientTypes from './types/clientTypes'
-import * as commonTypes from './types/commonTypes'
+import http from 'http'
+import * as urlModule from 'url'
+import {HEARTBEAT_DATA, HELLO_DATA, FULL_CLIENT_DATA, CLIENT_DATA, RETURN_CALL_FUNCTION} from './types/clientTypes'
+import {RESULT_ERROR, RESULT_OK, REQUEST_ERROR} from './types/commonTypes'
 
 const PORT = Number(process.env.PORT)
+
+const regexClientId = /^\/clients\/[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
+const regexCallFunction = /\/clients\/[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}\/\w+/i
 
 const server = dgram.createSocket('udp4');
 const HELLO_MSG = Buffer.from('HELLO_OK')
 const HEARTBEAT_MSG = Buffer.from('HEARTBEAT_OK')
-const errorObj:commonTypes.RESULT_ERROR = {data:{
+const errorObj:RESULT_ERROR = {data:{
   description:'Uncnown request'
 }}
-const ok_obj:commonTypes.RESULT_OK = {
+const ok_obj:RESULT_OK = {
   data:{
     descrption:'ok'
   }
 }
 
-const CLIENTS_DETAILS: clientTypes.CLIENT_DATA[] = []
+
+const fullClientsDetails: FULL_CLIENT_DATA[] = []
+
 
 function getCurrentTime(){
   const date = new Date()
   return date.toISOString()
 }
 
-function isHelloData(obj:any): obj is clientTypes.HELLO_DATA{
+function isHelloData(obj:any): obj is HELLO_DATA{
   try {
     return typeof obj === 'object' &&
   Array.isArray(obj.data.capacities) &&
@@ -37,7 +43,7 @@ function isHelloData(obj:any): obj is clientTypes.HELLO_DATA{
   
 }
 
-function isHeartbeat(obj:clientTypes.HEARTBEAT_DATA){
+function isHeartbeat(obj:HEARTBEAT_DATA){
   try{
     return obj.type === 'HEARTBEAT'
   }catch{
@@ -45,8 +51,16 @@ function isHeartbeat(obj:clientTypes.HEARTBEAT_DATA){
   }
 }
 
+function isReturnCullFunctionMsg(obj:RETURN_CALL_FUNCTION ){
+  try{
+    return obj.type === 'RETURN_CALL_FUNCTION'
+  }catch{
+    return false
+  }
+}
 
-function isRequestError(obj: any): obj is commonTypes.REQUEST_ERROR{
+
+function isRequestError(obj: any): obj is REQUEST_ERROR{
   try{
     return (
     typeof obj === 'object' &&
@@ -57,8 +71,35 @@ function isRequestError(obj: any): obj is commonTypes.REQUEST_ERROR{
   return false
 }
 }
-const get_clients = ()=>{
-  return CLIENTS_DETAILS
+
+function getClientByID(arr:CLIENT_DATA[],clientId:string){
+  return arr.find(obj => obj.id === clientId)
+  
+}
+
+function getFullClientByID(arr:FULL_CLIENT_DATA[],clientId:string){
+  return arr.find(obj => obj.id === clientId)
+  
+}
+
+function getClientIndexById(arr:FULL_CLIENT_DATA[], clientId:string){
+  return arr.findIndex(el=>el.id === clientId)
+}
+
+function checkClientAvaliable(){
+  const currentTime = new Date().getTime()
+  fullClientsDetails.forEach(obj=>{
+    const timeLastHeartbeat = new Date(obj.timeLastHeartbeat).getTime()
+    const timeDifference = currentTime - timeLastHeartbeat
+
+    if(timeDifference >=15000){
+      obj.isAvaliable = false
+    }
+  })
+}
+
+const getClientsDetails = ()=>{
+  return fullClientsDetails.map(({id, capacities, icon})=>({id, capacities, icon}))
 
 }
 
@@ -78,15 +119,31 @@ server.on('message', (msg:string, rinfo) => {
     if (isHelloData(msgObj)){
       server.send(HELLO_MSG, rinfo.port, rinfo.address);
       
-      let client_data:clientTypes.CLIENT_DATA = {
+      const client_data:FULL_CLIENT_DATA = {
         id:msgObj.data.id,
-        capacities:msgObj.data.capacities
+        capacities:msgObj.data.capacities,
+        icon:msgObj.data.icon,
+        adress:rinfo.address,
+        port: rinfo.port,
+        timeLastHeartbeat:'',
+        isAvaliable: true
+
       }
-      CLIENTS_DETAILS.push(client_data)
+      fullClientsDetails.push(client_data)
    
     }else if (isHeartbeat(msgObj)){
+      const clientIndex = getClientIndexById(fullClientsDetails,msgObj.clientId)
+      if(clientIndex>=0){
+        fullClientsDetails[clientIndex].timeLastHeartbeat = getCurrentTime()
+      }else{
+        console.log(`Client with id: ${msgObj.clientId} not found in full clients list`)
+      }
       server.send(HEARTBEAT_MSG, rinfo.port, rinfo.address);
+      console.log(fullClientsDetails)
+
     }else if (isRequestError(msgObj)){
+
+    }else if(isReturnCullFunctionMsg(msgObj)){
 
     }else{
 
@@ -102,10 +159,117 @@ server.on('message', (msg:string, rinfo) => {
 });
 
 
+const HTTPserver = http.createServer((request, response)=>{
+  const {url, method} = request
+  console.log(`url: ${url}, method: ${method}`)
+  if (url === undefined){
+      response.writeHead(404, {'Content-Type':'text/plain'})
+      response.end('404')
+  }
+  else if (method ==='GET' && url ==='/clients'){
+      response.writeHead(200, {'Content-Type':'text/plain'})
+      const arrAvaliableClients = fullClientsDetails.filter(obj=>obj.isAvaliable === true)
+      response.end(JSON.stringify(arrAvaliableClients))
+
+  } else if (method ==='GET' && regexClientId.test(url)){
+      const clientDetails = getClientsDetails()
+      const client = getClientByID(clientDetails,url.substring(9))
+      if (client){
+        response.writeHead(200, {'Content-Type':'text/plain'})
+        response.end(JSON.stringify(client))
+      } else{
+        response.writeHead(200, {'Content-Type':'text/plain'})
+        response.end(`Client with id ${url.substring(9)} not found`)
+
+      }
+
+
+  } else if (method ==='GET' && regexCallFunction.test(url)){
+     const uuid = url.substring(9,45)
+     const regexpGetFunctionName = /\/clients\/[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}\/(\w+)(?:\?.*)?/i;
+     const matchName = url.match(regexpGetFunctionName)
+     let functionName:string
+     let msgCullFunction
+     if (matchName){
+      functionName = matchName[1]
+     }else{
+      throw new Error('Function name not found')
+     }
+     const client = getFullClientByID(fullClientsDetails,uuid)
+     if (client && client.capacities.find(el=>el===functionName)){
+        const urlPath = urlModule.parse(url, true)
+        const {query} = urlPath
+        if (Object.keys(query).length >0){
+          msgCullFunction = {
+            data:{
+              name:functionName,
+              functionArgs: Object.values(query)
+            }
+          }
+          }else{
+            msgCullFunction = {
+              data:{
+                name:functionName,
+                functionArgs: []
+              }
+
+          }
+
+        }
+      server.send(JSON.stringify(msgCullFunction),client.port, client.adress)
+      const udpResponsePromise = new Promise((resolve)=>{
+        server.on('message', (msg:string, rinfo)=>{
+          let msgObj:any = {};
+          try{
+             msgObj = JSON.parse(msg)
+          }catch{
+            
+          }
+          if(isReturnCullFunctionMsg(msgObj)){
+            resolve(msgObj.result)
+          }
+        })
+      })
+
+      udpResponsePromise.then((udpResponse)=>{
+        response.writeHead(200, {'Content-Type':'text/plain'})
+        response.end(`Function: ${functionName} return: ${udpResponse}`)
+      }).catch(err=>{
+        response.writeHead(500, {'Content-Type':'text/plain'})
+        response.end(`Error with function ${functionName}`)
+      })
+ 
+      
+      
+     }else{
+      response.writeHead(200, {'Content-Type':'text/plain'})
+      response.end(`Client with id: "${uuid}" and function name: "${functionName}" not found`)
+     }
+
+      
+      
+
+  }else{
+      response.writeHead(404, {'Content-Type':'text/plain'})
+      response.end('404')
+  }
+
+
+})
+
+HTTPserver.listen(PORT, ()=>{
+  console.log('Http server is running')
+})
+
+
 
 
 
 server.bind(PORT, () => {
   server.setBroadcast(true); 
-  console.log('Server running');
+  console.log('UDP server is running');
 });
+
+setInterval(()=>{
+  checkClientAvaliable()
+},15000)
