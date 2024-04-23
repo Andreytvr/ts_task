@@ -25,6 +25,12 @@ const ok_obj:RESULT_OK = {
 
 const fullClientsDetails: FULL_CLIENT_DATA[] = []
 
+const regRoute: [RegExp,Function][] = [
+  [/^\/clients$/i,apiGetClients],
+  [/^\/clients\/[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i,apiGetClientById],
+  [/\/clients\/[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}\/\w+/i,apiGetClientFunction]
+]
+
 
 function getCurrentTime(){
   const date = new Date()
@@ -98,6 +104,92 @@ function checkClientAvaliable(){
   })
 }
 
+function apiGetClients(response:http.ServerResponse, url:string){
+      const arrAvaliableClients = fullClientsDetails.filter(obj=>obj.isAvaliable === true)
+      response.writeHead(200, {'Content-Type':'text/plain'})
+      response.end(JSON.stringify(arrAvaliableClients))
+
+}
+
+function apiGetClientById(response:http.ServerResponse, url:string){
+  const clientDetails = getClientsDetails()
+  const client = getClientByID(clientDetails,url.substring(9))
+  if (client){
+    response.writeHead(200, {'Content-Type':'text/plain'})
+    response.end(JSON.stringify(client))
+  } else{
+    response.writeHead(200, {'Content-Type':'text/plain'})
+    response.end(`Client with id ${url.substring(9)} not found`)
+
+  }
+
+}
+
+function apiGetClientFunction(response:http.ServerResponse, url:string){
+      const uuid = url.substring(9,45)
+     const regexpGetFunctionName = /\/clients\/[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}\/(\w+)(?:\?.*)?/i;
+     const matchName = url.match(regexpGetFunctionName)
+     let functionName:string
+     let msgCullFunction
+     if (matchName){
+      functionName = matchName[1]
+     }else{
+      throw new Error('Function name not found')
+     }
+     const client = getFullClientByID(fullClientsDetails,uuid)
+     if (client && client.capacities.find(el=>el===functionName)){
+        const urlPath = urlModule.parse(url, true)
+        const {query} = urlPath
+        if (Object.keys(query).length >0){
+          msgCullFunction = {
+            data:{
+              name:functionName,
+              functionArgs: Object.values(query)
+            }
+          }
+          }else{
+            msgCullFunction = {
+              data:{
+                name:functionName,
+                functionArgs: []
+              }
+
+          }
+
+        }
+      server.send(JSON.stringify(msgCullFunction),client.port, client.adress)
+      const udpResponsePromise = new Promise((resolve)=>{
+        server.on('message', (msg:string, rinfo)=>{
+          let msgObj:any = {};
+          try{
+             msgObj = JSON.parse(msg)
+          }catch{
+            
+          }
+          if(isReturnCullFunctionMsg(msgObj)){
+            resolve(msgObj.result)
+          }
+        })
+      })
+
+      udpResponsePromise.then((udpResponse)=>{
+        response.writeHead(200, {'Content-Type':'text/plain'})
+        response.end(`Function: ${functionName} return: ${udpResponse}`)
+      }).catch(err=>{
+        response.writeHead(500, {'Content-Type':'text/plain'})
+        response.end(`Error with function ${functionName}`)
+      })
+ 
+      
+      
+     }else{
+      response.writeHead(200, {'Content-Type':'text/plain'})
+      response.end(`Client with id: "${uuid}" and function name: "${functionName}" not found`)
+     }
+ 
+}
+
+
 const getClientsDetails = ()=>{
   return fullClientsDetails.map(({id, capacities, icon})=>({id, capacities, icon}))
 
@@ -162,96 +254,18 @@ server.on('message', (msg:string, rinfo) => {
 const HTTPserver = http.createServer((request, response)=>{
   const {url, method} = request
   console.log(`url: ${url}, method: ${method}`)
-  if (url === undefined){
+  if (method !== 'GET' || url === undefined){
       response.writeHead(404, {'Content-Type':'text/plain'})
       response.end('404')
-  }
-  else if (method ==='GET' && url ==='/clients'){
-      response.writeHead(200, {'Content-Type':'text/plain'})
-      const arrAvaliableClients = fullClientsDetails.filter(obj=>obj.isAvaliable === true)
-      response.end(JSON.stringify(arrAvaliableClients))
-
-  } else if (method ==='GET' && regexClientId.test(url)){
-      const clientDetails = getClientsDetails()
-      const client = getClientByID(clientDetails,url.substring(9))
-      if (client){
-        response.writeHead(200, {'Content-Type':'text/plain'})
-        response.end(JSON.stringify(client))
-      } else{
-        response.writeHead(200, {'Content-Type':'text/plain'})
-        response.end(`Client with id ${url.substring(9)} not found`)
-
-      }
-
-
-  } else if (method ==='GET' && regexCallFunction.test(url)){
-     const uuid = url.substring(9,45)
-     const regexpGetFunctionName = /\/clients\/[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}\/(\w+)(?:\?.*)?/i;
-     const matchName = url.match(regexpGetFunctionName)
-     let functionName:string
-     let msgCullFunction
-     if (matchName){
-      functionName = matchName[1]
-     }else{
-      throw new Error('Function name not found')
-     }
-     const client = getFullClientByID(fullClientsDetails,uuid)
-     if (client && client.capacities.find(el=>el===functionName)){
-        const urlPath = urlModule.parse(url, true)
-        const {query} = urlPath
-        if (Object.keys(query).length >0){
-          msgCullFunction = {
-            data:{
-              name:functionName,
-              functionArgs: Object.values(query)
-            }
-          }
-          }else{
-            msgCullFunction = {
-              data:{
-                name:functionName,
-                functionArgs: []
-              }
-
-          }
-
-        }
-      server.send(JSON.stringify(msgCullFunction),client.port, client.adress)
-      const udpResponsePromise = new Promise((resolve)=>{
-        server.on('message', (msg:string, rinfo)=>{
-          let msgObj:any = {};
-          try{
-             msgObj = JSON.parse(msg)
-          }catch{
-            
-          }
-          if(isReturnCullFunctionMsg(msgObj)){
-            resolve(msgObj.result)
-          }
-        })
-      })
-
-      udpResponsePromise.then((udpResponse)=>{
-        response.writeHead(200, {'Content-Type':'text/plain'})
-        response.end(`Function: ${functionName} return: ${udpResponse}`)
-      }).catch(err=>{
-        response.writeHead(500, {'Content-Type':'text/plain'})
-        response.end(`Error with function ${functionName}`)
-      })
- 
-      
-      
-     }else{
-      response.writeHead(200, {'Content-Type':'text/plain'})
-      response.end(`Client with id: "${uuid}" and function name: "${functionName}" not found`)
-     }
-
-      
-      
-
   }else{
+    const route = regRoute.find(([k])=>k.test(url))
+    if (route===undefined){
       response.writeHead(404, {'Content-Type':'text/plain'})
       response.end('404')
+    }else{
+      route[1](response, url)
+    }
+    
   }
 
 
