@@ -29,7 +29,7 @@ export type FULL_CLIENT_DATA = {
   icon?: Buffer
   adress: string
   port: number
-  timeLastHeartbeat:string
+  timeLastHeartbeat:number
   isAvaliable: boolean
 }  
 
